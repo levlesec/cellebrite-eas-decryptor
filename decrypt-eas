@@ -1,0 +1,278 @@
+#!/usr/bin/python3
+
+# Part of this code was lifted from cellebrited. Thanks to them and a shout out to bla
+# Author: Matt Bergin
+
+from termcolor import colored, cprint
+from binascii import hexlify
+import colorama
+import argparse
+import random
+import sys
+import os
+colorama.init()
+
+def print_matrix(array1,highlights=[],split=16):
+  chunks = [array1[x:x+split] for x in range(0, len(array1), split)]
+  for i in range(len(chunks)):
+    if isinstance(array1[0],str):
+      print(' '.join(colored("{0:#0{1}x}".format(int(element,16),4), 'cyan') if (((i*split)+x)) in highlights else colored("{0:#0{1}x}".format(int(element,16),4), 'white') for x,element in enumerate(chunks[i])))
+    elif isinstance(array1[0],int):
+      print(' '.join(colored("{0:#0{1}x}".format(int(element),4), 'cyan') if (((i*split)+x)) in highlights else colored("{0:#0{1}x}".format(int(element),4), 'white') for x,element in enumerate(chunks[i])))
+    else:
+      return False
+
+class CellebriteEas(object):
+    def __init__(self, debug=False,alwaysYes=False):
+        self.debug = debug
+        self.debugEx = debug
+        self.debugOps = debug
+        self.alwaysYes = alwaysYes
+        self._box = bytearray(256)
+        self.KEY_SIZE = 16
+        self.BOX_SIZE = 256
+        self._encryptionKey=None
+
+    def setKey(self,Key):
+        self._encryptionKey=Key
+        for index in range(256):
+            self._box[index] = index
+        index1 = 0
+        for index2 in range(256):
+            index1 = (index1 +  self._box[index2] + self._encryptionKey[index2 % len(self._encryptionKey)]) % 256
+            num = self._box[index2]
+            old_1 = self._box[index2]
+            old_2 = self._box[index1]
+            self._box[index2] = self._box[index1]
+            self._box[index1] = num
+            if (self.debug): print("TRANSPOSE SBOX1[{}] was {} now {}. SBOX1[{}] was {} now {}".format(index2, colored(hex(old_1),'cyan'), colored(hex(self._box[index2]),'cyan'), index1, colored(hex(old_2),'cyan'), colored(hex(self._box[index1]),'cyan')))
+        self._ivArray = [self._encryptionKey[1]]
+        #self._ivArray = []
+        for i in range(0x270):
+            #next = self._encryptionKey[1] & 0xcd & 0xff if i == 0 else self._ivArray[-1] * 0xcd & 0xff
+            next = self._ivArray[-1] * 0xcd & 0xff
+            #if i == 0: self._ivArray = []
+            self._ivArray.append(next)
+            #self._ivArray[i] = next
+            if (self.debug): print("DERIVE SBOX2[{}] = {}".format(i,colored(hex(self._ivArray[i]),'green')))
+        self._ivArray = self._ivArray[:0x270]
+        self._ivInitArray = self._ivArray[:0x270]
+        if (self.debug): print("-"*80)
+
+    def try_sbox2_fixup(self):
+        #self._ivArray = self._ivArray[32:64] * int(((0x270-32)/16))
+        self._ivArray = [self._encryptionKey[1] + 0x80]
+        #self._ivArray = []
+        for i in range(0x270):
+            #next = self._encryptionKey[1] & 0xcd & 0xff if i == 0 else self._ivArray[-1] * 0xcd & 0xff
+            next = self._ivArray[-1] * 0xcd & 0xff
+            #if i == 0: self._ivArray = []
+            self._ivArray.append(next)
+        return
+
+    def crypto(self,data):
+        skipto26f = False
+        complete = False
+        index1 = 0
+        index2 = 0
+        numArray1 = bytearray(len(data))
+        numArray2 = bytearray()
+        numArray2 += self._box
+        for index3 in range(len(data)):
+            skipPrompt = False
+
+            if (index3 == 0x26f):
+                self._ivArray = self._ivInitArray[:0x270]
+
+            index1 = (index1 + 1) % 256
+            index2 = (index2 + numArray2[index1]) % 256
+            num1 = numArray2[index1]
+            old_1 = numArray2[index1]
+            old_2 = numArray2[index2]
+            numArray2[index1] = numArray2[index2]
+            numArray2[index2] = num1
+            if (self.debug): print("TRANSPOSE SBOX1[{}] was {} now {}. SBOX1[{}] was {} now {}".format(index1, colored(hex(old_1),'cyan'), colored(hex(numArray2[index1]),'cyan'), index2, colored(hex(old_2),'cyan'), colored(hex(numArray2[index2]),'cyan')))
+
+            num2 = data[index3]
+            cipherByte = num2
+
+            if (index3 > 0x26e):
+
+                for i in range(0xe3):
+                    ivByte_2 = self._ivArray[i + 1]
+                    if (self.debugOps): print("ivByte_2 = SBOX2[{} + 1] = {}".format(i,colored(hex(ivByte_2),'cyan')))
+                    ivByte_3 = ivByte_2 >> 1
+                    if (self.debugOps): print("ivByte_3 = ivByte_2 >> 1 = {}".format(hex(ivByte_3)))
+                    ivByte_4 = ivByte_2 & 1
+                    if (self.debugOps): print("ivByte_4 = ivByte_2 & 1 = {}".format(hex(ivByte_4)))
+                    ivByte_5 = 0x00 if ivByte_4 == 0x00 else 0xdf
+                    if (self.debugOps): print("ivByte_5 = 0 if ivByte_4 is 0 else 0xdf = {}".format(hex(ivByte_5)))
+                    ivByte_6 = self._ivArray[(0x18d + i) % len(self._ivArray)]
+                    if (self.debugOps): print("ivByte_6 = self._ivArray[{}] = {}".format((0x18d + i) % len(self._ivArray),colored(hex(ivByte_6),'cyan')))
+                    ivByte_7 = ivByte_5 ^ ivByte_6
+                    if (self.debugOps): print("ivByte_7 = ivByte_5 ^ ivByte_6 = {}".format(hex(ivByte_7)))
+                    ivByte_8 = ivByte_3 ^ ivByte_7
+                    if (self.debugOps): print("ivByte_8 = ivByte_3 ^ ivByte_7 = {}".format(hex(ivByte_8)))
+                    if (self.debugOps): print("TRANSPOSE 1 ITER {} SBOX2[{}] was {} now {}".format(hex(index3),i,colored(hex(self._ivArray[i]),'cyan'),colored(hex(ivByte_8),'cyan')))
+                    self._ivArray[i] = ivByte_8
+
+                for i in range(0x18c):
+                    ivByte_2 = self._ivArray[i + 0xe4]
+                    if (self.debugOps): print("ivByte_2 = SBOX2[{} + 0xe4] = {}".format(hex(i),colored(hex(ivByte_2),'cyan')))
+                    ivByte_3 = ivByte_2 >> 1
+                    if (self.debugOps): print("ivByte_3 = ivByte_2 >> 1 = {}".format(hex(ivByte_3)))
+                    ivByte_4 = ivByte_2 & 1
+                    if (self.debugOps): print("ivByte_4 = ivByte_2 & 1 = {}".format(hex(ivByte_4)))
+                    ivByte_5 = 0x00 if ivByte_4 == 0x00 else 0xdf
+                    if (self.debugOps): print("ivByte_5 = 0 if ivByte_4 is 0 else 0xdf = {}".format(hex(ivByte_5)))
+                    ivByte_6 = self._ivArray[i]
+                    if (self.debugOps): print("ivByte_6 = SBOX2[{}] = {}".format(i,colored(hex(ivByte_6),'cyan')))
+                    ivByte_7 = ivByte_5 ^ ivByte_6
+                    if (self.debugOps): print("ivByte_7 = ivByte_5 ^ ivByte_6 = {}".format(hex(ivByte_7)))
+                    ivByte_8 = ivByte_3 ^ ivByte_7
+                    if (self.debugOps): print("ivByte_8 = ivByte_3 ^ ivByte_7 = {}".format(hex(ivByte_8)))
+                    if (self.debugOps): print("TRANSPOSE 2 ITER {} SBOX2[{}] was {} now {}".format(hex(index3),i+0xe3,colored(hex(self._ivArray[i + 0xe3]),'cyan'),colored(hex(ivByte_8),'cyan')))
+                    self._ivArray[i + 0xe3] = ivByte_8
+
+                ivByte_2 = self._ivArray[0]
+                if (self.debugOps): print("ivByte_2 = SBOX2[0] = {}".format(colored(hex(ivByte_2),'cyan')))
+                ivByte_3 = ivByte_2 >> 1
+                if (self.debugOps): print("ivByte_3 = ivByte_2 >> 1 = {}".format(hex(ivByte_3)))
+                ivByte_4 = ivByte_2 & 1
+                if (self.debugOps): print("ivByte_4 = ivByte_2 & 1 = {}".format(hex(ivByte_4)))
+                ivByte_5 = 0x00 if ivByte_4 == 0x00 else 0xdf
+                if (self.debugOps): print("ivByte_5 = 0 if ivByte_4 is 0 else 0xdf = {}".format(hex(ivByte_5)))
+                ivByte_6 = ivByte_5 ^ ivByte_3
+                if (self.debugOps): print("ivByte_6 = ivByte_5 ^ ivByte_3 = {}".format(hex(ivByte_6)))
+                ivByte_7 = self._ivArray[(0x18d - 1) % len(self._ivArray)]
+                if (self.debugOps): print("ivByte_7 = SBOX2[0x18d - 1 % {}] = {}".format(len(self._ivArray),colored(hex(ivByte_7),'cyan')))
+                ivByte_8 = ivByte_7 ^ ivByte_6
+                if (self.debugOps): print("ivByte_8 = ivByte_7 ^ ivByte_6 = {}".format(hex(ivByte_8)))
+                if (self.debugOps): print("TRANSPOSE 3 ITER {} SBOX2[-1] was {} now {}".format(hex(index3),colored(hex(self._ivArray[-1]),'cyan'),colored(hex(ivByte_8),'cyan')))
+                self._ivArray[-1] = ivByte_8
+
+                ivDerivedByte = self._ivArray[0]
+
+                sboxByte = numArray2[old_1 + numArray2[index1] + 0x64 & 0xff]
+
+                if (self.debugEx):
+                    print("SBOX1 {}".format(hex(len(numArray2))))
+                    print_matrix([hex(i) for i in numArray2],highlights=[(old_1 + numArray2[index1] + 0x64 & 0xff)])
+                    print("-"*80)
+
+                if (self.debugEx):
+                    print("SBOX2 {}".format(hex(len(self._ivArray))))
+                    print_matrix([hex(i) for i in self._ivArray],highlights=[0,(0x18d - 1 % 624),623])
+                    print("-"*80)
+
+                numArray1[index3] = (((((((ivDerivedByte << 0x7 & 0xff) ^ ivDerivedByte) >> 0x12 & 0xff) ^ (((ivDerivedByte << 0x7 & 0xff) ^ ivDerivedByte))) ^ sboxByte) ^ cipherByte) ^ 0xcb)
+
+                if (self.debug): print("DECRYPTED {} = ((((((({} << 0x7 & 0xff) ^ {}) >> 0x12 & 0xff) ^ ((({} << 0x7 & 0xff) ^ {}))) ^ {}) ^ {}) ^ 0xcb) == {} POS {}".format(colored(hex(cipherByte),'red'),
+                                                                                                                                                                                    colored(hex(ivDerivedByte),'cyan'),
+                                                                                                                                                                                    colored(hex(ivDerivedByte),'cyan'),
+                                                                                                                                                                                    colored(hex(ivDerivedByte),'cyan'),
+                                                                                                                                                                                    colored(hex(ivDerivedByte),'cyan'),
+                                                                                                                                                                                    colored(hex(sboxByte),'cyan'),
+                                                                                                                                                                                    colored(hex(cipherByte),'red'),
+                                                                                                                                                                                    colored(hex(numArray1[index3]),'yellow'),
+                                                                                                                                                                                    colored(hex(index3)),'white')
+                                                                                                                                                                                    )
+                if (self.debugEx): print("-"*80)
+
+
+                if not complete and self.debug:
+                    humanTest = input("Do you want to keep going? (y/n/q/s) ")
+                    if (humanTest in ["n","q"]):
+                        exit(1)
+
+            else:
+
+                ivByte = self._ivArray[index3 % len(self._ivArray)] # ivByte
+                sboxByte = numArray2[old_1 + numArray2[index1] + 0x64 & 0xff]
+
+                if (self.debugEx):
+                    print("SBOX1 {}".format(hex(len(numArray2))))
+                    print_matrix([hex(i) for i in numArray2],highlights=[(old_1 + numArray2[index1] + 0x64 & 0xff)])
+                    print("-"*80)
+
+                if (self.debugEx):
+                    print("SBOX2 {}".format(hex(len(self._ivArray))))
+                    print_matrix([hex(i) for i in self._ivArray],highlights=[(index3 % len(self._ivArray))])
+                    print("-"*80)
+
+                numArray1[index3] = (((((ivByte << 0xb & 0xff) >> 0x7) >> 0x12 ^ ivByte) ^ sboxByte) ^ cipherByte) ^ 0xcb
+
+                if (self.debug): print("DECRYPTED {} = ((((({} << 0xb & 0xff) >> 0x7) >> 0x12 ^ {}) ^ {}) ^ {}) ^ 0xcb == {} POS {}".format(colored(hex(cipherByte),'red'),
+                                                                                                                                            colored(hex(ivByte),'cyan'),
+                                                                                                                                            colored(hex(ivByte),'cyan'),
+                                                                                                                                            colored(hex(sboxByte),'cyan'),
+                                                                                                                                            colored(hex(cipherByte),'red'),
+                                                                                                                                            colored(hex(numArray1[index3]),'yellow'),
+                                                                                                                                            colored(hex(index3)),'white')
+                                                                                                                                            )
+                if (self.debugEx): print("-"*80)
+
+                if (index3 == 0 and numArray1[index3] != 0x4d):
+                    if not self.alwaysYes:
+                        humanInput = input("[!] The first byte has failed to decrypt. Do you want to try a experimental fix? (y/n) ")
+                    else:
+                        humanInput = "y"
+                    if humanInput == "y":
+                        self.try_sbox2_fixup()
+                        print("[-] Fix applied, trying again.")
+                        ivByte = self._ivArray[index3 % len(self._ivArray)] # ivByte
+                        numArray1[index3] = (((((ivByte << 0xb & 0xff) >> 0x7) >> 0x12 ^ ivByte) ^ sboxByte) ^ cipherByte) ^ 0xcb
+                        if (self.debug): print("DECRYPTED {} = ((((({} << 0xb & 0xff) >> 0x7) >> 0x12 ^ {}) ^ {}) ^ {}) ^ 0xcb == {} POS {}".format(colored(hex(cipherByte),'red'),
+                                                                                                                                                    colored(hex(ivByte),'cyan'),
+                                                                                                                                                    colored(hex(ivByte),'cyan'),
+                                                                                                                                                    colored(hex(sboxByte),'cyan'),
+                                                                                                                                                    colored(hex(cipherByte),'red'),
+                                                                                                                                                    colored(hex(numArray1[index3]),'yellow'),
+                                                                                                                                                    colored(hex(index3)),'white')
+                                                                                                                                                    )
+                        if (self.debugEx): print("-"*80)
+                        skipPrompt = True
+                    else:
+                        exit(1)
+
+                if not complete and not skipto26f and not skipPrompt and self.debug:
+                    humanTest = input("Do you want to keep going? (y/n/q/s/t) ")
+                    if (humanTest == "t"):
+                        skipto26f = True
+                    elif (humanTest in ["y"]):
+                        complete = True
+                    elif (humanTest in ["n","q"]):
+                        exit(1)
+
+        return numArray1
+
+    def decrypt(self,filename):
+        buffer=bytearray()
+        with open(filename,"rb") as file:
+            file_data=file.read()
+            PadLen=list(bytearray(file_data))[0] + 0xf
+            if (self.debugEx): print("[*] OFFSET {}".format(hex(PadLen)))
+            Pad=[hex(i) for i in list(bytearray(file_data[1:PadLen]))]
+            Key=bytearray(file_data[PadLen:PadLen+16])
+            if (self.debugEx): print("[*] IV 0x{}".format(hexlify(Key).decode()))
+            Data=bytearray(file_data[:PadLen] + file_data[PadLen+16:-16])
+            self.setKey(Key)
+            return self.crypto(Data)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Cellebrite UFED Physical Analyzer 7.46.0.64 EAS File Decryptor', prog=sys.argv[0], usage='%(prog)s [options]',epilog='Author: Matt Bergin, KoreLogic (@thatguylevel)')
+    parser.add_argument('--file', type=str, help='The path of the EAS file to decrypt', default='')
+    parser.add_argument('--verbose', action='store_true', help='Enables verbose output (noisy)', default=False)
+    parser.add_argument('--yes',action='store_true', help='Answer yes to any questions', default=False)
+    args = parser.parse_args()
+    if (len(args.file)>0):
+        if not os.path.exists(args.file) or not args.file.endswith('eas'):
+            print("[!] Could not find an EAS file at {}".format(args.file))
+        else:
+            print("[+] Decrypting: {}".format(args.file))
+            enc = CellebriteEas(debug=args.verbose,alwaysYes=args.yes)
+            with open(args.file.replace(".eas",".dll"),"wb") as file:
+                file.write(enc.decrypt(args.file))
+            print("[+] Done.")
+            exit(0)
+    exit(1)
